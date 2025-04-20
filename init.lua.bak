@@ -1,0 +1,127 @@
+-- 监听 XPTV.app 的全屏状态变化
+local function handleWindowChange(win)
+    if win:application():name() == "XPTV" then
+        if win:isFullScreen() then
+            -- 进入全屏时，设置菜单栏为 "In Full Screen Only"
+            runAppleScript("In Full Screen Only")
+        else
+            -- 退出全屏时，设置菜单栏为 "Never"
+            runAppleScript("Never")
+        end
+    end
+end
+
+-- 执行 AppleScript 的函数
+function runAppleScript(targetOption)
+    local appleScript = [[
+        -- 确保 "System Settings" 关闭
+        if running of application "System Settings" then
+            try
+                tell application "System Settings" to quit
+            on error
+                do shell script "killall 'System Preferences'"
+            end try
+            delay 0.1
+        end if
+
+        -- 等待 System Settings 完全退出
+        repeat while running of application "System Settings" is true
+            delay 0.1
+        end repeat
+
+        -- 打开 System Settings 到 "Control Center"
+        do shell script "open -j x-apple.systempreferences:com.apple.ControlCenter-Settings.extension"
+
+        -- 定义下拉菜单的预期选项
+        set ALWAYS to "Always"
+        set ON_DESKTOP_ONLY to "On Desktop Only"
+        set IN_FULL_SCREEN_ONLY to "In Full Screen Only"
+        set NEVER to "Never"
+
+        -- 使用 System Events 读取下拉菜单的值
+        tell application "System Events"
+            tell application process "System Settings"
+                -- 等待目标控件出现
+                repeat until exists (pop up button 1 of group 9 of scroll area 1 of group 1 of group 2 of splitter group 1 of group 1 of window "Control Center")
+                    delay 0.1
+                end repeat
+                
+                -- 读取下拉菜单的当前值
+                set currentValue to value of pop up button 1 of group 9 of scroll area 1 of group 1 of group 2 of splitter group 1 of group 1 of window "Control Center"
+                tell pop up button 1 of group 9 of scroll area 1 of group 1 of group 2 of splitter group 1 of group 1 of window "Control Center"
+                    click
+                    if currentValue is not equal to "]] .. targetOption .. [[" then
+                        click menu item "]] .. targetOption .. [[" of menu 1
+                    end if
+                end tell
+            end tell
+        end tell
+
+        -- 关闭 System Settings
+        delay 0.5
+        tell application "System Settings" to quit
+    ]]
+    local ok, result = hs.osascript.applescript(appleScript)
+    if not ok then
+        -- 错误信息可以记录到日志中，但不显示提示
+        hs.logger.new("MenuBarScript", "error"):e("AppleScript error: " .. result)
+    end
+end
+
+-- 创建窗口过滤器，监听 XPTV.app 的全屏事件
+local wf = hs.window.filter.new("XPTV")
+wf:subscribe(hs.window.filter.windowFullscreened, handleWindowChange)
+wf:subscribe(hs.window.filter.windowUnfullscreened, handleWindowChange)
+
+-- 初始化：检查 XPTV 是否已经在运行并处于全屏状态
+local app = hs.application.find("XPTV")
+if app then
+    local mainWindow = app:mainWindow()
+    if mainWindow then
+        if mainWindow:isFullScreen() then
+            runAppleScript("In Full Screen Only")
+        else
+            runAppleScript("Never")
+        end
+    end
+end
+
+-- ########################
+
+-- 函数：查找进程 ID (PID)
+local function getPIDs(processName)
+    local cmd = string.format("ps -ef | grep '%s' | grep -v grep | awk '{print $2}'", processName)
+    local output = hs.execute(cmd)
+    local pids = {}
+    for pid in output:gmatch("%d+") do
+        table.insert(pids, pid)
+    end
+    return pids
+end
+
+-- 函数：终止指定进程
+local function killProcesses(processName)
+    local pids = getPIDs(processName)
+    for _, pid in ipairs(pids) do
+        if pid and pid ~= "" then
+            local killCmd = string.format("kill -9 %s", pid)
+            hs.execute(killCmd)
+            hs.logger.new("KillProcess", "info"):i(string.format("Killed process %s with PID %s", processName, pid))
+        end
+    end
+end
+
+-- 进程列表
+local x86List = {"VisualizerService_x86", "CarbonComponentScannerXPC", "WardaSynthesizer_x86_64"}
+
+-- 终止所有指定进程
+local function killAllX86Processes()
+    for _, processName in ipairs(x86List) do
+        killProcesses(processName)
+    end
+end
+
+-- 在 Hammerspoon 启动时执行一次
+killAllX86Processes()
+
+-- #####################
